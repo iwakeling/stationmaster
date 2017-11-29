@@ -32,29 +32,6 @@ TIME = 1
 AM_PM = 2
 DESCRIPTION = 3
 
-def wagonOutgoing( wagon ):
-    return wagon.outgoing
-
-def wagonRemaining( wagon ):
-    return not wagon.outgoing
-
-def wagonState( wagon ):
-    return str( wagon.wagonType ) + ',' \
-        +  str( wagon.age ) + ',' \
-        +  str( wagon.outgoing )
-
-def wagonLoad( wagonState ):
-    fields = wagonState.split( ',' )
-    wagon = Wagon( fields[0] )
-    wagon.age = int( fields[1] )
-    wagon.outgoing = fields[2] == "True"
-    return wagon
-
-def parseVertex( vertex, game ):
-    coords = vertex.split( ',' )
-    return (    int( coords[0] ),
-                int( coords[1] ) + game.height / 3 + 10 )
-
 def incrementIndex( currentValue, limit ):
     newValue = currentValue + 1
     if newValue >= limit:
@@ -81,14 +58,27 @@ class Button:
         return pressed
 
 class Wagon:
-    def __init__( self, wagonType ):
-        self.wagonType = int( wagonType )
-        self.age = 0 
-        self.outgoing = False
+    def __init__( self, wagonState ):
+        fields = wagonState.split( ',' )
+        self.wagonType = int( fields[0] )
+        if len( fields ) > 1:
+            self.age = int( fields[1] )
+        else:
+            self.age = 0
+        if len( fields ) > 2:
+            self.outgoing = fields[2] == "True"
+        else:
+            self.outgoing = False
         self.selected = False
 
     def markOutgoing( self ):
         self.outgoing = True
+
+    def outgoing( self ):
+        return self.outgoing
+
+    def remaining( self ):
+        return not self.outgoing
 
     def text( self, wagonTypes ):
         if self.wagonType < len( wagonTypes ):
@@ -96,6 +86,11 @@ class Wagon:
         else:
             val = '?'
         return val
+
+    def state( self ):
+        return str( self.wagonType ) + ',' \
+            +  str( self.age ) + ',' \
+            +  str( self.outgoing )
 
     def draw( self, left, top, width, game ):
         if self.age == 0:
@@ -147,9 +142,13 @@ class Wagon:
         return (width,height + 5)
 
 class Siding:
-    def __init__( self, length, vertices, game ):
+    def __init__( self, length, wagonTypes, vertices, game ):
         self.length = length
-        self.vertices = [   parseVertex( vertex, game ) 
+        if wagonTypes != '':
+            self.wagonTypes = [ int( wt ) for wt in wagonTypes.split( ',' ) ]
+        else:
+            self.wagonTypes = []
+        self.vertices = [   game.parseVertex( vertex ) 
                             for vertex in vertices.split( ';' ) ]
         self.displayLength = math.fabs(
                                 self.vertices[-1][0] 
@@ -193,15 +192,18 @@ class Siding:
                     oldest.append( wagon )
 
     def transferOutgoing( self, rake ):
-        rake.extend( filter( wagonOutgoing, self.wagons ) )
-        self.wagons = filter( wagonRemaining, self.wagons )
+        rake.extend( filter( Wagon.outgoing, self.wagons ) )
+        self.wagons = filter( Wagon.remaining, self.wagons )
+
+    def accepts( self, wagon ):
+        return wagon.wagonType in self.wagonTypes
 
     def save( self, f ):
         f.write( "s/" )
-        f.write( "/".join( map( wagonState, self.wagons ) ) + "\n"  )
+        f.write( "/".join( map( Wagon.state, self.wagons ) ) + "\n" )
 
     def load( self, wagonStates ):
-        self.wagons = map( wagonLoad, wagonStates )
+        self.wagons = map( Wagon, wagonStates )
 
 class Game:
     def __init__( self, baseName ):
@@ -233,6 +235,11 @@ class Game:
         self.loadState( baseName )
         self.nextMoveTime()
 
+    def parseVertex( self, vertex ):
+        coords = vertex.split( ',' )
+        return (    int( coords[0] ),
+                    int( coords[1] ) + self.height / 3 + 10 )
+
     def loadWTT( self, baseName ):
         f = open( baseName + ".wtt" )
         self.moves = f.readlines()
@@ -243,9 +250,9 @@ class Game:
         for line in f:
             line = line.strip()
             if line != "":
-                (length,vertices) = line.split( '/' )
+                (length,types,vertices) = line.split( '/' )
                 self.sidings.append( 
-                    Siding( int( length ), vertices, self ) )
+                    Siding( int( length ), types, vertices, self ) )
         f.close()
 
     def loadState( self, baseName ):
@@ -283,7 +290,7 @@ class Game:
                 elif fields[0] == 'r':
                     if fields[1] != '' :
                         self.rakes.append(
-                            map( wagonLoad, fields[1:] ) )
+                            map( Wagon, fields[1:] ) )
                 elif fields[0] == 's':
                     siding = sidingIter.next()
                     if fields[1] != '':
@@ -313,12 +320,22 @@ class Game:
     def allocateWagons( self, train ):
         for wagon in train:
             allocated = False
-            while not allocated:
-                sIdx = random.randint( 0, len( self.sidings ) - 1 )
-                siding = self.sidings[ sIdx ]
+            possibilities = [ siding    for siding in self.sidings 
+                                        if siding.accepts( wagon ) ]
+            while not allocated and len( possibilities ) > 0:
+                sIdx = random.randint( 0, len( possibilities ) - 1 )
+                siding = possibilities[ sIdx ]
                 if len( siding.wagons ) < siding.length:
                     allocated = True
                     siding.wagons.append( wagon )
+                else:
+                    possibilities.remove( siding )
+
+            if not allocated:
+                possibilities = [ siding    for siding in self.sidings 
+                                            if siding.accepts( wagon ) ]
+                possibilities[0].wagons.append( wagon )
+
 
     def handleShutdownButton( self ):
         f = open( self.baseName + ".state", "w" )
@@ -327,7 +344,7 @@ class Game:
             siding.save( f )
         for rake in self.rakes:
             f.write( "r/" )
-            f.write( "/".join( map( wagonState, rake ) ) + "\n"  )
+            f.write( "/".join( map( Wagon.state, rake ) ) + "\n"  )
         f.close()
         
     def selectOutgoing( self ):

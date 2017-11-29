@@ -61,7 +61,7 @@ class WagonType:
     def __init__( self, wagonDefn ):
         fields = wagonDefn.split( ',' )
         self.name = fields[0]
-        self.length = int( fields[1] )
+        self.length = float( fields[1] )
 
 class Wagon:
     def __init__( self, wagonState ):
@@ -311,9 +311,11 @@ class Game:
                 if fields[0] == 'm':
                     self.moveIndex = int( fields[1] )
                 elif fields[0] == 'r':
-                    if fields[1] != '' :
-                        self.rakes.append(
-                            map( Wagon, fields[1:] ) )
+                    if fields[1] != '':
+                        wagons = map( Wagon, fields[1:] )
+                    else:
+                        wagons = []
+                    self.rakes.append( wagons )
                 elif fields[0] == 's':
                     siding = sidingIter.next()
                     if fields[1] != '':
@@ -387,7 +389,20 @@ class Game:
         [ siding.transferOutgoing( rake ) for siding in self.sidings ]
         [ wagon.reset() for wagon in rake ]
 
+    def removeDepartedWagons( self ):
+        move = self.moves[ self.moveIndex ].strip()
+        if move != "":
+            moveType = move.split( '/' )[ TYPE ] 
+            if moveType == '-': 
+                rake = self.rakes[ self.nextRake ] 
+                self.transferOutgoing( rake )
+                self.nextRake = incrementIndex( 
+                                    self.nextRake,
+                                    len( self.rakes ) )
+
     def handleNextMoveButton( self ):
+        self.removeDepartedWagons()
+        self.ageWagons()
         self.moveIndex = incrementIndex( self.moveIndex, len( self.moves ) )
         if self.moveIndex == 0:
             self.time = 0
@@ -396,12 +411,6 @@ class Game:
         if move != "":
             rake = self.rakes[ self.nextRake ] 
             moveType = move.split( '/' )[ TYPE ] 
-            if moveType == '-': 
-                self.transferOutgoing( rake )
-                self.nextRake = incrementIndex( 
-                                    self.nextRake,
-                                    len( self.rakes ) )
-            self.ageWagons()
             if moveType == '+':
                 self.selectOutgoing()
                 self.allocateWagons( rake )

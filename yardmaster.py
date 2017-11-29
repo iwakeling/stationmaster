@@ -49,20 +49,32 @@ def incrementIndex( currentValue, limit ):
         newValue = 0
     return newValue
 
-def setupButton( pin ):
-    GPIO.setup( pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN )
-    GPIO.add_event_detect( 
-        pin,
-        GPIO.RISING )
 
-def checkButton( pin ):
-    return GPIO.input( pin ) or GPIO.event_detected( pin )
+class Button:
+    def __init__( self, pin, minRepeatMS ):
+        self.pin = pin
+        self.minRepeatMS = minRepeatMS
+        self.lastPress = pygame.time.get_ticks()
+        GPIO.setup( pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN )
+        GPIO.add_event_detect( 
+            pin,
+            GPIO.RISING )
+
+    def pressed( self ):
+        pressed = False
+        if GPIO.input( self.pin ) or GPIO.event_detected( self.pin ):
+            now = pygame.time.get_ticks()
+            if now - self.lastPress > self.minRepeatMS:
+                self.lastPress = now
+                pressed = True
+        return pressed
 
 class Wagon:
     def __init__( self, wagonType ):
         self.wagonType = int( wagonType )
         self.age = 0 
         self.outgoing = False
+        self.selected = False
 
     def markOutgoing( self ):
         self.outgoing = True
@@ -103,6 +115,25 @@ class Wagon:
             math.fabs( width ) )
         left = left + space
         return left
+
+    def drawSpare( self, left, top, colour, game ):
+        text = self.text( game.wagonTypes )
+        (width, height) = game.wagonFont.size( text )
+        weight = 1
+        if game.selectedWagon() == self:
+            weight = 2
+        game.drawTextLine( 
+            text,
+            colour,
+            game.wagonFont,
+            left,
+            top )
+        pygame.draw.rect(
+            game.surface,
+            colour,
+            Rect( left, top, width, height ),
+            weight )
+        return (width,height + 5)
 
 class Siding:
     def __init__( self, length, vertices, game ):
@@ -161,9 +192,14 @@ class Game:
         self.wagonTypes = []
         self.rakes = []
         self.nextRake = 0
+        self.selection = ()
         self.sidings = []
         self.trainLength = 1
-        self.lastMovePress = pygame.time.get_ticks()
+        self.lastMoveButton = Button( PREV_MOVE_PIN, 1000 ) 
+        self.nextMoveButton = Button( NEXT_MOVE_PIN, 1000 )
+        self.wagonSelectButton = Button( WAGON_SELECT_PIN, 500 )
+        self.wagonChangeButton = Button( WAGON_CHANGE_PIN, 500 )
+        self.shutdownButton = Button( SHUTDOWN_PIN, 0 )
         self.moveIndex = 0
         self.moveTime = 0
         self.time = 0
@@ -203,6 +239,7 @@ class Game:
                     self.trainLength = int( fields[1] )
                 elif fields[0] == 'w':
                     self.wagonTypes = fields[1:]
+                    self.wagonTypes.append( "" )
                 elif fields[0] == 'r':
                     self.rakes.append( 
                         map( Wagon, fields[1:] ) )
@@ -259,34 +296,61 @@ class Game:
             wagon.age = 0
             wagon.outgoing = False
 
-    def checkShutdownButton( self ):
-        return ch
-
     def handleNextMoveButton( self ):
-        if checkButton( NEXT_MOVE_PIN ):
-            now = pygame.time.get_ticks()
-            if now - self.lastMovePress > 1000:
-                self.moveIndex = self.moveIndex + 1
-                self.lastMovePress = now
-                self.nextMoveTime()
-                if self.moveIndex < len( self.moves ):
-                    move = self.moves[ self.moveIndex ].strip()
+        self.moveIndex = self.moveIndex + 1
+        self.nextMoveTime()
+        if self.moveIndex < len( self.moves ):
+            move = self.moves[ self.moveIndex ].strip()
+        else:
+            move = ""
+        if move != "":
+            rake = self.rakes[ self.nextRake ] 
+            moveType = move.split( '/' )[ TYPE ] 
+            if moveType == '-': 
+                self.transferOutgoing( rake )
+                self.nextRake = incrementIndex( 
+                                    self.nextRake,
+                                    len( self.rakes ) )
+            self.ageWagons()
+            if moveType == '+':
+                self.selectOutgoing()
+                self.allocateWagons( rake )
+                rake[:] = []
+
+    def selectedWagon( self ):
+        wagon = None
+        if len( self.selection ) > 0:
+            rake = self.rakes[ self.selection[0] ]
+            wagon = rake[ self.selection[1] ]
+        return wagon
+
+    def handleWagonSelectButton( self ):
+        currentWagon = self.selectedWagon()
+        if currentWagon != None \
+        and currentWagon.wagonType == len( self.wagonTypes ) - 1:
+            self.rakes[ self.selection[0] ].remove( currentWagon )
+            self.selection = ()
+        else:
+            if len( self.selection ) == 0:
+                self.selection = ( 0, 0 )
+            else:
+                rake = self.rakes[ self.selection[0] ]
+                if self.selection[1] < len( rake ) - 1:
+                    self.selection = (  self.selection[0],
+                                        self.selection[1] + 1 )
                 else:
-                    move = ""
-                if move != "":
-                    rake = self.rakes[ self.nextRake ] 
-                    moveType = move.split( '/' )[ TYPE ] 
-                    if moveType == '-': 
-                        self.transferOutgoing( rake )
-                        self.nextRake = incrementIndex( 
-                                            self.nextRake,
-                                            len( self.rakes ) )
-                    self.ageWagons()
-                    if moveType == '+':
-                        self.selectOutgoing()
-                        self.allocateWagons( rake )
-                        rake[:] = []
-                        
+                    if self.selection[0] < len( self.rakes ) - 1:
+                        self.selection = (  self.selection[0] + 1,
+                                            0 )
+                    else:
+                        self.selection = ()
+
+    def handleWagonChangeButton( self ):
+        wagon = self.selectedWagon()
+        if wagon != None:
+            wagon.wagonType = incrementIndex( 
+                                wagon.wagonType,
+                                len( self.wagonTypes ) )
 
     def drawClock( self, moveIndex ):
         clockSize = ( self.height / 6 ) - 10 
@@ -391,20 +455,13 @@ class Game:
             height = 0
             left = 10
             for wagon in rake:
-                text = wagon.text( self.wagonTypes )
-                (width, height) = self.font.size( text )
                 if rake == self.rakes[ self.nextRake ]:
                     colour = LIGHTYELLOW
                 else:
                     colour = DARKGRAY
-                self.drawTextLine( 
-                    text,
-                    colour,
-                    self.font,
-                    left,
-                    top )
+                (width,height) = wagon.drawSpare( left, top, colour, self )
                 left = left + width + 10 
-            top = top + height
+            top = top + height + 10
 
     def drawBoard( self ):
         left = 0
@@ -433,8 +490,15 @@ class Game:
     def runGame( self ):
         done = False
         while not done:
-            done = checkButton( SHUTDOWN_PIN )
-            self.handleNextMoveButton()
+            if self.shutdownButton.pressed():
+                done = True
+            elif self.nextMoveButton.pressed():
+                self.handleNextMoveButton()
+            elif self.wagonSelectButton.pressed():
+                self.handleWagonSelectButton()
+            elif self.wagonChangeButton.pressed():
+                self.handleWagonChangeButton()
+
             if self.moveIndex >= len( self.moves ):
                 self.moveIndex = 0
                 self.time = 0
@@ -447,11 +511,6 @@ class Game:
 
 def main():
     GPIO.setmode( GPIO.BOARD )
-    setupButton( PREV_MOVE_PIN ) 
-    setupButton( NEXT_MOVE_PIN )
-    setupButton( WAGON_SELECT_PIN )
-    setupButton( WAGON_CHANGE_PIN )
-    setupButton( SHUTDOWN_PIN )
 
     pygame.init()
     pygame.mouse.set_visible( False )

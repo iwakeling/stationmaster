@@ -1,16 +1,33 @@
 #!/bin/bash
-echo "Starting StationMaster"
-path=`dirname $0`
-cd $path
-./stationmaster.py lion-mills
 
-#if there's no keyboard plugged in, shutdown
-#otherwise let the system go to the prompt
-keyboards=`wc -l /proc/bus/input/devices | cut -d' ' -f1`
-if [ $keyboards == "0" ]; then
-    echo "Auto halting system"
-    halt
+function check_keyboard()
+{
+    echo "checking for keyboard"
+    keyboards=`wc -l /proc/bus/input/devices | cut -d' ' -f1`
+    if [ $keyboards == "0" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+check_keyboard
+if [ "$?" == "0" ]; then
+    echo "Starting StationMaster"
+    path=`dirname $0`
+    cd $path
+    ./stationmaster.py lion-mills
+
+    #if there's no keyboard plugged in, shutdown
+    #otherwise let the system go to the prompt
+    check_keyboard
+    if [ "$?" == "0" ]; then
+        echo "Auto halting system"
+        halt
+    else
+        echo "keyboard present, exiting";
+    fi
 else
-    echo "keyboard present, exiting";
+    echo "keyboard present, not starting StationMaster";
 fi
 

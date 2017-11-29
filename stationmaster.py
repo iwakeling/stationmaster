@@ -57,6 +57,12 @@ class Button:
                 pressed = True
         return pressed
 
+class WagonType:
+    def __init__( self, wagonDefn ):
+        fields = wagonDefn.split( ',' )
+        self.name = fields[0]
+        self.length = int( fields[1] )
+
 class Wagon:
     def __init__( self, wagonState ):
         fields = wagonState.split( ',' )
@@ -71,28 +77,43 @@ class Wagon:
             self.outgoing = False
         self.selected = False
 
+    def reset( self ):
+        self.age = 0
+        self.outgoing = False
+
+    def incrAge( self ):
+        incr = random.randint( 1, 5 )
+        self.age = self.age + incr
+
     def markOutgoing( self ):
         self.outgoing = True
 
-    def outgoing( self ):
+    def isOutgoing( self ):
         return self.outgoing
-
-    def remaining( self ):
-        return not self.outgoing
 
     def text( self, wagonTypes ):
         if self.wagonType < len( wagonTypes ):
-            val = wagonTypes[ self.wagonType ]
+            val = wagonTypes[ self.wagonType ].name
         else:
             val = '?'
         return val
+
+    def length( self, wagonTypes ):
+        if self.wagonType < len( wagonTypes ):
+            val = wagonTypes[ self.wagonType ].length
+        else:
+            val = 1
+        return val
+
+    def width( self, baseWidth, wagonTypes ):
+        return self.length( wagonTypes ) * baseWidth
 
     def state( self ):
         return str( self.wagonType ) + ',' \
             +  str( self.age ) + ',' \
             +  str( self.outgoing )
 
-    def draw( self, left, top, width, game ):
+    def draw( self, left, top, baseWidth, game ):
         if self.age == 0:
             colour = DARKGREEN
         elif self.outgoing:
@@ -102,6 +123,7 @@ class Wagon:
         top = top - game.wagonFont.get_linesize()
         height = game.wagonFont.get_linesize() + game.wagonFont.get_height()
         text = self.text( game.wagonTypes )
+        width = self.width( baseWidth, game.wagonTypes )
         pygame.draw.rect(
             game.surface,
             colour,
@@ -174,26 +196,27 @@ class Siding:
                 left = wagon.draw( left, top, wagonWidth, game )
 
     def ageWagons( self ):
-        for wagon in self.wagons:
-            incr = random.randint( 1, 5 )
-            wagon.age = wagon.age + incr
+        [ wagon.incrAge() for wagon in self.wagons ]
 
-    def selectOutgoing( self, oldest, trainLength ):
+    def selectOutgoing( self, oldest, trainLength, wagonTypes ):
+        def sumLengths( lhs, rhs ):
+            return lhs + rhs.length( wagonTypes )
+
+        def removeYoungest( oldest ):
+            youngest = oldest[0]
+            for candidate in oldest:
+                if candidate.age < youngest.age:
+                    youngest = candidate
+            oldest.remove( youngest )
+
         for wagon in self.wagons:
-            if len( oldest ) < trainLength:
-                oldest.append( wagon )
-            else:
-                youngest = oldest[0]
-                for candidate in oldest:
-                    if candidate.age < youngest.age:
-                        youngest = candidate
-                if wagon.age > youngest.age:
-                    oldest.remove( youngest )
-                    oldest.append( wagon )
+            oldest.append( wagon )
+            while reduce( sumLengths, oldest, 0 ) > trainLength:
+                removeYoungest( oldest )
 
     def transferOutgoing( self, rake ):
-        rake.extend( filter( Wagon.outgoing, self.wagons ) )
-        self.wagons = filter( Wagon.remaining, self.wagons )
+        rake.extend( [ w for w in self.wagons if w.isOutgoing() ] )
+        self.wagons = [ w for w in self.wagons if not w.isOutgoing() ]
 
     def accepts( self, wagon ):
         return wagon.wagonType in self.wagonTypes
@@ -249,7 +272,7 @@ class Game:
         f = open( baseName + ".layout" )
         for line in f:
             line = line.strip()
-            if line != "":
+            if line != "" and line[0] != '#':
                 (length,types,vertices) = line.split( '/' )
                 self.sidings.append( 
                     Siding( int( length ), types, vertices, self ) )
@@ -264,13 +287,13 @@ class Game:
         config = open( baseName + ".config" )
         for line in config:
             line = line.strip()
-            if line != "":
+            if line != "" and line[0] != '#':
                 fields = line.split( '/' )
                 if fields[0] == 'n':
                     self.trainLength = int( fields[1] )
                 elif fields[0] == 'w':
-                    self.wagonTypes = fields[1:]
-                    self.wagonTypes.append( "" )
+                    self.wagonTypes = map( WagonType, fields[1:] )
+                    self.wagonTypes.append( WagonType( ",0" ) )
                 elif state == None:
                     if fields[0] == 'r':
                         self.rakes.append( 
@@ -340,30 +363,29 @@ class Game:
     def handleShutdownButton( self ):
         f = open( self.baseName + ".state", "w" )
         f.write( "m/{}\n".format( self.moveIndex ) )
-        for siding in self.sidings:
-            siding.save( f )
-        for rake in self.rakes:
+        [ siding.save( f ) for siding in self.sidings ]
+        nextRake = self.nextRake
+        allRakesWritten = False
+        while not allRakesWritten:
+            rake = self.rakes[ nextRake ]
             f.write( "r/" )
             f.write( "/".join( map( Wagon.state, rake ) ) + "\n"  )
+            nextRake = incrementIndex( nextRake, len( self.rakes ) )
+            allRakesWritten = nextRake == self.nextRake
         f.close()
         
     def selectOutgoing( self ):
         oldest = []
-        for siding in self.sidings:
-            siding.selectOutgoing( oldest, self.trainLength ) 
-        for wagon in oldest:
-            wagon.markOutgoing()
+        [ siding.selectOutgoing( oldest, self.trainLength, self.wagonTypes )
+            for siding in self.sidings ]
+        [ wagon.markOutgoing() for wagon in oldest ]
 
     def ageWagons( self ):
-        for siding in self.sidings:
-            siding.ageWagons() 
+        [ siding.ageWagons() for siding in self.sidings ]
     
     def transferOutgoing( self, rake ):
-        for siding in self.sidings:
-            siding.transferOutgoing( rake ) 
-        for wagon in rake:
-            wagon.age = 0
-            wagon.outgoing = False
+        [ siding.transferOutgoing( rake ) for siding in self.sidings ]
+        [ wagon.reset() for wagon in rake ]
 
     def handleNextMoveButton( self ):
         self.moveIndex = incrementIndex( self.moveIndex, len( self.moves ) )
@@ -520,7 +542,7 @@ class Game:
 
     def drawRakes( self, top ):
         for rake in self.rakes:
-            height = 0
+            height = self.wagonFont.get_linesize()
             left = 10
             for wagon in rake:
                 if rake == self.rakes[ self.nextRake ]:
@@ -545,8 +567,7 @@ class Game:
             WHITE,
             ( 5, self.height / 3 ),
             ( self.width - 5, self.height / 3 ) )
-        for siding in self.sidings:
-            siding.draw( self )
+        [ siding.draw( self ) for siding in self.sidings ]
         top = self.height / 6 * 5
         pygame.draw.line(
             self.surface,

@@ -38,17 +38,28 @@ def wagonOutgoing( wagon ):
 def wagonRemaining( wagon ):
     return not wagon.outgoing
 
+def wagonState( wagon ):
+    return str( wagon.wagonType ) + ',' \
+        +  str( wagon.age ) + ',' \
+        +  str( wagon.outgoing )
+
+def wagonLoad( wagonState ):
+    fields = wagonState.split( ',' )
+    wagon = Wagon( fields[0] )
+    wagon.age = int( fields[1] )
+    wagon.outgoing = fields[2] == "True"
+    return wagon
+
 def parseVertex( vertex, game ):
     coords = vertex.split( ',' )
     return (    int( coords[0] ),
-                int( coords[1] ) + game.height / 3 + 30 )
+                int( coords[1] ) + game.height / 3 + 10 )
 
 def incrementIndex( currentValue, limit ):
     newValue = currentValue + 1
     if newValue >= limit:
         newValue = 0
     return newValue
-
 
 class Button:
     def __init__( self, pin, minRepeatMS ):
@@ -184,9 +195,17 @@ class Siding:
     def transferOutgoing( self, rake ):
         rake.extend( filter( wagonOutgoing, self.wagons ) )
         self.wagons = filter( wagonRemaining, self.wagons )
-                        
+
+    def save( self, f ):
+        f.write( "s/" )
+        f.write( "/".join( map( wagonState, self.wagons ) ) + "\n"  )
+
+    def load( self, wagonStates ):
+        self.wagons = map( wagonLoad, wagonStates )
+
 class Game:
     def __init__( self, baseName ):
+        self.baseName = baseName
         self.clock = pygame.time.Clock()
         self.moves = []
         self.wagonTypes = []
@@ -208,10 +227,10 @@ class Game:
         self.height = self.surface.get_height()
         self.font = pygame.font.Font( 'freesansbold.ttf', 18 )
         self.wagonFont = pygame.font.Font( 'freesansbold.ttf', 16 )
-        pygame.display.set_caption( 'Yardmaster' )
+        pygame.display.set_caption( 'Stationmaster' )
         self.loadWTT( baseName )
         self.loadLayout( baseName )
-        self.loadConfig( baseName )
+        self.loadState( baseName )
         self.nextMoveTime()
 
     def loadWTT( self, baseName ):
@@ -229,9 +248,14 @@ class Game:
                     Siding( int( length ), vertices, self ) )
         f.close()
 
-    def loadConfig( self, baseName ):
-        f = open( baseName + ".config" )
-        for line in f:
+    def loadState( self, baseName ):
+        try:
+            state = open( baseName + ".state" )
+        except:
+            state = None
+
+        config = open( baseName + ".config" )
+        for line in config:
             line = line.strip()
             if line != "":
                 fields = line.split( '/' )
@@ -240,13 +264,31 @@ class Game:
                 elif fields[0] == 'w':
                     self.wagonTypes = fields[1:]
                     self.wagonTypes.append( "" )
+                elif state == None:
+                    if fields[0] == 'r':
+                        self.rakes.append( 
+                            map( Wagon, fields[1:] ) )
+                    elif fields[0] == 'i':
+                        self.allocateWagons( 
+                            map( Wagon, fields[1:] ) )
+        config.close()
+
+        if state != None:
+            sidingIter = self.sidings.__iter__()
+            for line in state:
+                line = line.strip()
+                fields = line.split( '/' )
+                if fields[0] == 'm':
+                    self.moveIndex = int( fields[1] )
                 elif fields[0] == 'r':
-                    self.rakes.append( 
-                        map( Wagon, fields[1:] ) )
-                elif fields[0] == 'i':
-                    self.allocateWagons( 
-                        map( Wagon, fields[1:] ) )
-        f.close()
+                    if fields[1] != '' :
+                        self.rakes.append(
+                            map( wagonLoad, fields[1:] ) )
+                elif fields[0] == 's':
+                    siding = sidingIter.next()
+                    if fields[1] != '':
+                        siding.load( fields[1:] )
+            state.close()
 
     def start( self ):
         self.fps = 5
@@ -278,6 +320,16 @@ class Game:
                     allocated = True
                     siding.wagons.append( wagon )
 
+    def handleShutdownButton( self ):
+        f = open( self.baseName + ".state", "w" )
+        f.write( "m/{}\n".format( self.moveIndex ) )
+        for siding in self.sidings:
+            siding.save( f )
+        for rake in self.rakes:
+            f.write( "r/" )
+            f.write( "/".join( map( wagonState, rake ) ) + "\n"  )
+        f.close()
+        
     def selectOutgoing( self ):
         oldest = []
         for siding in self.sidings:
@@ -297,12 +349,11 @@ class Game:
             wagon.outgoing = False
 
     def handleNextMoveButton( self ):
-        self.moveIndex = self.moveIndex + 1
+        self.moveIndex = incrementIndex( self.moveIndex, len( self.moves ) )
+        if self.moveIndex == 0:
+            self.time = 0
         self.nextMoveTime()
-        if self.moveIndex < len( self.moves ):
-            move = self.moves[ self.moveIndex ].strip()
-        else:
-            move = ""
+        move = self.moves[ self.moveIndex ].strip()
         if move != "":
             rake = self.rakes[ self.nextRake ] 
             moveType = move.split( '/' )[ TYPE ] 
@@ -479,7 +530,7 @@ class Game:
             ( self.width - 5, self.height / 3 ) )
         for siding in self.sidings:
             siding.draw( self )
-        top = self.height / 6 *5
+        top = self.height / 6 * 5
         pygame.draw.line(
             self.surface,
             WHITE,
@@ -491,6 +542,7 @@ class Game:
         done = False
         while not done:
             if self.shutdownButton.pressed():
+                self.handleShutdownButton()
                 done = True
             elif self.nextMoveButton.pressed():
                 self.handleNextMoveButton()
@@ -499,15 +551,11 @@ class Game:
             elif self.wagonChangeButton.pressed():
                 self.handleWagonChangeButton()
 
-            if self.moveIndex >= len( self.moves ):
-                self.moveIndex = 0
-                self.time = 0
-            else:
-                if self.time < self.moveTime:
-                    self.time = self.time + 1
-                self.drawBoard()
-                pygame.display.update()
-                self.clock.tick( self.fps )
+            if self.time < self.moveTime:
+                self.time = self.time + 1
+            self.drawBoard()
+            pygame.display.update()
+            self.clock.tick( self.fps )
 
 def main():
     GPIO.setmode( GPIO.BOARD )

@@ -21,11 +21,11 @@ BGCOLOUR = BLACK
 MAX_WAGON_WIDTH = 50
 WAGON_GAP = 5
 
-PREV_MOVE_PIN = int( 11 ) #blue
-NEXT_MOVE_PIN = int( 12 ) #green
-WAGON_SELECT_PIN = int( 13 ) #yellow
+#unused = int( 11 ) #blue
+EXIT_PIN = int( 15 ) #red
 WAGON_CHANGE_PIN = int( 16 ) #white
-SHUTDOWN_PIN = int( 15 ) #red
+WAGON_SELECT_PIN = int( 13 ) #yellow
+NEXT_MOVE_PIN = int( 22 ) #green
 
 TYPE = 0
 TIME = 1
@@ -44,7 +44,7 @@ class Button:
         self.minRepeatMS = minRepeatMS
         self.lastPress = pygame.time.get_ticks()
         GPIO.setup( pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN )
-        GPIO.add_event_detect( 
+        GPIO.add_event_detect(
             pin,
             GPIO.RISING )
 
@@ -134,7 +134,7 @@ class Wagon:
             space = -WAGON_GAP
         else:
             space = width + WAGON_GAP
-        game.drawText( 
+        game.drawText(
             text,
             colour,
             game.wagonFont,
@@ -150,7 +150,7 @@ class Wagon:
         weight = 1
         if game.selectedWagon() == self:
             weight = 2
-        game.drawTextLine( 
+        game.drawTextLine(
             text,
             colour,
             game.wagonFont,
@@ -170,19 +170,19 @@ class Siding:
             self.wagonTypes = [ int( wt ) for wt in wagonTypes.split( ',' ) ]
         else:
             self.wagonTypes = []
-        self.vertices = [   game.parseVertex( vertex ) 
+        self.vertices = [   game.parseVertex( vertex )
                             for vertex in vertices.split( ';' ) ]
         self.displayLength = math.fabs(
-                                self.vertices[-1][0] 
+                                self.vertices[-1][0]
                                 - self.vertices[0][0] )
         self.wagons = []
 
     def draw( self, game ):
-        pygame.draw.lines( 
-            game.surface, 
-            WHITE, 
-            False, 
-            self.vertices, 
+        pygame.draw.lines(
+            game.surface,
+            WHITE,
+            False,
+            self.vertices,
             3 )
         left = self.vertices[0][0]
         top = self.vertices[0][1]
@@ -239,11 +239,10 @@ class Game:
         self.selection = ()
         self.sidings = []
         self.trainLength = 1
-        self.lastMoveButton = Button( PREV_MOVE_PIN, 1000 ) 
         self.nextMoveButton = Button( NEXT_MOVE_PIN, 1000 )
         self.wagonSelectButton = Button( WAGON_SELECT_PIN, 500 )
         self.wagonChangeButton = Button( WAGON_CHANGE_PIN, 500 )
-        self.shutdownButton = Button( SHUTDOWN_PIN, 0 )
+        self.exitButton = Button( EXIT_PIN, 0 )
         self.moveIndex = 0
         self.moveTime = 0
         self.time = 0
@@ -274,7 +273,7 @@ class Game:
             line = line.strip()
             if line != "" and line[0] != '#':
                 (length,types,vertices) = line.split( '/' )
-                self.sidings.append( 
+                self.sidings.append(
                     Siding( int( length ), types, vertices, self ) )
         f.close()
 
@@ -296,10 +295,10 @@ class Game:
                     self.wagonTypes.append( WagonType( ",0" ) )
                 elif state == None:
                     if fields[0] == 'r':
-                        self.rakes.append( 
+                        self.rakes.append(
                             map( Wagon, fields[1:] ) )
                     elif fields[0] == 'i':
-                        self.allocateWagons( 
+                        self.allocateWagons(
                             map( Wagon, fields[1:] ) )
         config.close()
 
@@ -345,7 +344,7 @@ class Game:
     def allocateWagons( self, train ):
         for wagon in train:
             allocated = False
-            possibilities = [ siding    for siding in self.sidings 
+            possibilities = [ siding    for siding in self.sidings
                                         if siding.accepts( wagon ) ]
             while not allocated and len( possibilities ) > 0:
                 sIdx = random.randint( 0, len( possibilities ) - 1 )
@@ -357,12 +356,12 @@ class Game:
                     possibilities.remove( siding )
 
             if not allocated:
-                possibilities = [ siding    for siding in self.sidings 
+                possibilities = [ siding    for siding in self.sidings
                                             if siding.accepts( wagon ) ]
                 possibilities[0].wagons.append( wagon )
 
 
-    def handleShutdownButton( self ):
+    def handleExitButton( self ):
         f = open( self.baseName + ".state", "w" )
         f.write( "m/{}\n".format( self.moveIndex ) )
         [ siding.save( f ) for siding in self.sidings ]
@@ -375,7 +374,7 @@ class Game:
             nextRake = incrementIndex( nextRake, len( self.rakes ) )
             allRakesWritten = nextRake == self.nextRake
         f.close()
-        
+
     def selectOutgoing( self ):
         oldest = []
         [ siding.selectOutgoing( oldest, self.trainLength, self.wagonTypes )
@@ -384,7 +383,7 @@ class Game:
 
     def ageWagons( self ):
         [ siding.ageWagons() for siding in self.sidings ]
-    
+
     def transferOutgoing( self, rake ):
         [ siding.transferOutgoing( rake ) for siding in self.sidings ]
         [ wagon.reset() for wagon in rake ]
@@ -392,11 +391,11 @@ class Game:
     def removeDepartedWagons( self ):
         move = self.moves[ self.moveIndex ].strip()
         if move != "":
-            moveType = move.split( '/' )[ TYPE ] 
-            if moveType == '-': 
-                rake = self.rakes[ self.nextRake ] 
+            moveType = move.split( '/' )[ TYPE ]
+            if moveType == '-':
+                rake = self.rakes[ self.nextRake ]
                 self.transferOutgoing( rake )
-                self.nextRake = incrementIndex( 
+                self.nextRake = incrementIndex(
                                     self.nextRake,
                                     len( self.rakes ) )
 
@@ -409,8 +408,8 @@ class Game:
         self.nextMoveTime()
         move = self.moves[ self.moveIndex ].strip()
         if move != "":
-            rake = self.rakes[ self.nextRake ] 
-            moveType = move.split( '/' )[ TYPE ] 
+            rake = self.rakes[ self.nextRake ]
+            moveType = move.split( '/' )[ TYPE ]
             if moveType == '+':
                 self.selectOutgoing()
                 self.allocateWagons( rake )
@@ -447,12 +446,12 @@ class Game:
     def handleWagonChangeButton( self ):
         wagon = self.selectedWagon()
         if wagon != None:
-            wagon.wagonType = incrementIndex( 
+            wagon.wagonType = incrementIndex(
                                 wagon.wagonType,
                                 len( self.wagonTypes ) )
 
     def drawClock( self, moveIndex ):
-        clockSize = ( self.height / 6 ) - 10 
+        clockSize = ( self.height / 6 ) - 10
         clockCenter = ( self.height / 6, self.height / 6 )
         clockTime = self.time % 720
         hourRad = float( clockTime ) / 360  * math.pi
@@ -528,24 +527,24 @@ class Game:
     def drawMove( self, moveIndex, colour, slot ):
         move = self.moves[ moveIndex ].strip()
         if move != "":
-            (newCards,time,ampm,description) = move.split( '/' ) 
-            self.drawTextLine( 
-                time, 
+            (newCards,time,ampm,description) = move.split( '/' )
+            self.drawTextLine(
+                time,
                 colour,
                 self.font,
-                self.height / 3, 
+                self.height / 3,
                 ( self.height / 9 ) * slot )
-            self.drawTextLine( 
-                ampm, 
+            self.drawTextLine(
+                ampm,
                 colour,
                 self.font,
                 self.height / 3 + 40,
                 ( self.height / 9 ) * slot )
-            self.drawText( 
-                description, 
+            self.drawText(
+                description,
                 colour,
                 self.font,
-                self.height / 3 + 75, 
+                self.height / 3 + 75,
                 ( self.height / 9 ) * slot,
                 self.width )
 
@@ -559,7 +558,7 @@ class Game:
                 else:
                     colour = DARKGRAY
                 (width,height) = wagon.drawSpare( left, top, colour, self )
-                left = left + width + 10 
+                left = left + width + 10
             top = top + height + 10
 
     def drawBoard( self ):
@@ -588,8 +587,8 @@ class Game:
     def runGame( self ):
         done = False
         while not done:
-            if self.shutdownButton.pressed():
-                self.handleShutdownButton()
+            if self.exitButton.pressed():
+                self.handleExitButton()
                 done = True
             elif self.nextMoveButton.pressed():
                 self.handleNextMoveButton()
@@ -618,4 +617,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
